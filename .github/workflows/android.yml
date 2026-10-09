@@ -32,14 +32,20 @@ jobs:
               permissions.append('    <uses-permission android:name="android.permission.INTERNET" />')
           if "android.permission.POST_NOTIFICATIONS" not in text:
               permissions.append('    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />')
-          if "android:extractNativeLibs" not in text:
-              text = text.replace("<application", '<application android:extractNativeLibs="true"', 1)
           if permissions:
               text = text.replace("    <application", "\n".join(permissions) + "\n    <application", 1)
           manifest.write_text(text)
 
           gradle = Path("android/app/build.gradle.kts")
           text = gradle.read_text()
+          # AGP requires native-library extraction to be configured in Gradle,
+          # not via android:extractNativeLibs in AndroidManifest.xml.
+          if "useLegacyPackaging = true" not in text:
+              text = text.replace(
+                  "android {",
+                  "android {\\n    packaging {\\n        jniLibs {\\n            useLegacyPackaging = true\\n        }\\n    }",
+                  1,
+              )
           if "isCoreLibraryDesugaringEnabled" not in text:
               text = text.replace("compileOptions {", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", 1)
           if "coreLibraryDesugaring(" not in text:
