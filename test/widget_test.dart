@@ -11,6 +11,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('كل فيديوهاتك في مكان واحد'), findsOneWidget);
     expect(find.text('إرسال رابط'), findsWidgets);
-    expect(find.text('البحث'), findsOneWidget);
+    expect(find.text('البحث'), findsNWidgets(2));
   });
 }
