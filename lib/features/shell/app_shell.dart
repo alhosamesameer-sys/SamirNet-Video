@@ -848,18 +848,18 @@ class _AppShellState extends State<AppShell> {
       } catch (_) {}
     }
     if (!mounted) return;
-    final player = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF000000))
-      ..setNavigationDelegate(NavigationDelegate(
-        onNavigationRequest: (request) => request.url.contains('youtube.com/embed/')
-            || request.url.contains('youtube.com')
-            || request.url.contains('youtube-nocookie.com')
-            || request.url.contains('google.com')
-            ? NavigationDecision.navigate
-            : NavigationDecision.prevent,
-      ))
-      ..loadHtmlString('''
+    final player = WebViewController();
+    await player.setJavaScriptMode(JavaScriptMode.unrestricted);
+    await player.setBackgroundColor(const Color(0xFF000000));
+    await player.setNavigationDelegate(NavigationDelegate(
+      onNavigationRequest: (request) => request.url.contains('youtube.com/embed/')
+          || request.url.contains('youtube.com')
+          || request.url.contains('youtube-nocookie.com')
+          || request.url.contains('google.com')
+          ? NavigationDecision.navigate
+          : NavigationDecision.prevent,
+    ));
+    await player.loadHtmlString('''
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"></head>
 <body style="margin:0;background:#000"><iframe width="100%" height="100%" src="https://www.youtube.com/embed/${details.id}?autoplay=1&rel=1&playsinline=1" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>
 ''');
@@ -1014,8 +1014,12 @@ class _AppShellState extends State<AppShell> {
       LinearProgressIndicator(value: _downloadProgress),
       const SizedBox(height: 6),
       Text(
-        'تم استلام ${_formatBytes(_downloadReceived)}'
-        '${_downloadTotal != null && _downloadTotal! > 0 ? ' من ${_formatBytes(_downloadTotal!)}' : ''}',
+        _activeYtDlpTaskId != null
+            ? (_downloadProgress == null
+                ? 'محرك yt-dlp يعمل...'
+                : 'التقدم: ${(_downloadProgress! * 100).toStringAsFixed(1)}%')
+            : 'تم استلام ${_formatBytes(_downloadReceived)}'
+                '${_downloadTotal != null && _downloadTotal! > 0 ? ' من ${_formatBytes(_downloadTotal!)}' : ''}',
         textAlign: TextAlign.center,
       ),
       Align(
