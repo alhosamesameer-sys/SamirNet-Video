@@ -851,6 +851,7 @@ class _AppShellState extends State<AppShell> {
       } catch (_) {}
     }
     if (!mounted) return;
+    final maxDialogHeight = MediaQuery.of(context).size.height * .72;
     final player = WebViewController();
     await player.setJavaScriptMode(JavaScriptMode.unrestricted);
     await player.setBackgroundColor(const Color(0xFF000000));
@@ -875,7 +876,7 @@ class _AppShellState extends State<AppShell> {
           width: double.maxFinite,
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * .72,
+              maxHeight: maxDialogHeight,
             ),
             child: SingleChildScrollView(
               child: Column(
