@@ -867,6 +867,7 @@ class _AppShellState extends State<AppShell> {
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"></head>
 <body style="margin:0;background:#000"><iframe width="100%" height="100%" src="https://www.youtube.com/embed/${details.id}?autoplay=1&rel=1&playsinline=1" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>
 ''');
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
