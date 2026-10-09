@@ -76,7 +76,7 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [_home(), _searchPage(), _linkPage(), _libraryPage()];
+    final pages = [_home(), _searchPage(), _linkPage(), _downloadsPage()];
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
