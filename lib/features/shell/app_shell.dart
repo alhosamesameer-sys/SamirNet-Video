@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as p;
+import 'package:docman/docman.dart';
 import '../../services/download/direct_media_downloader.dart';
 import '../../services/download/media_source_inspector.dart';
+import '../../services/download/download_notification_service.dart';
 import '../../services/search/youtube_search_service.dart';
 import '../../services/settings_service.dart';
 import '../../core/theme/app_theme.dart';
@@ -34,8 +36,28 @@ class _AppShellState extends State<AppShell> {
   bool _cancelRequested = false;
   int _downloadReceived = 0;
   int? _downloadTotal;
+  String? _saveFolderUri;
+  String _saveFolderName = 'مجلد التطبيق الخاص';
+  bool _notificationsEnabled = false;
   @override
-  void initState() { super.initState(); _refresh(); SettingsService.loadYouTubeApiKey().then((key) { if (mounted) setState(() => _apiKey = key); }); }
+  void initState() {
+    super.initState();
+    _refresh();
+    SettingsService.loadYouTubeApiKey().then((key) {
+      if (mounted) setState(() => _apiKey = key);
+    });
+    SettingsService.loadSaveFolderUri().then((uri) {
+      if (mounted) setState(() => _saveFolderUri = uri);
+    });
+    SettingsService.loadSaveFolderName().then((name) {
+      if (mounted && name != null && name.isNotEmpty) {
+        setState(() => _saveFolderName = name);
+      }
+    });
+    SettingsService.loadNotificationsEnabled().then((enabled) {
+      if (mounted) setState(() => _notificationsEnabled = enabled);
+    });
+  }
   @override
   void dispose() { _url.dispose(); _search.dispose(); super.dispose(); }
 
@@ -105,16 +127,48 @@ class _AppShellState extends State<AppShell> {
         },
       );
       final size = await file.length();
+      String? destinationUri;
+      String? folderCopyError;
+      final selectedFolderUri = _saveFolderUri;
+      if (selectedFolderUri != null && selectedFolderUri.isNotEmpty) {
+        try {
+          final sourceFile = await DocumentFile.fromUri(file.path);
+          final copiedFile = await sourceFile?.copyTo(
+            selectedFolderUri,
+            name: p.basename(file.path),
+          );
+          if (copiedFile == null) {
+            throw Exception('لم يتمكن Android من إنشاء نسخة في المجلد المحدد.');
+          }
+          destinationUri = copiedFile.uri;
+        } catch (error) {
+          folderCopyError = error.toString().replaceFirst('Exception: ', '');
+        }
+      }
       await DownloadDatabase.updateDownload(
         id,
         status: 'اكتمل التنزيل',
         filePath: file.path,
         fileSize: size,
+        destinationUri: destinationUri ?? '',
       );
       await _refresh();
+      if (_notificationsEnabled) {
+        try {
+          await DownloadNotificationService.show(
+            id: id,
+            title: 'اكتمل التنزيل',
+            body: p.basename(file.path),
+          );
+        } catch (_) {
+          // A notification failure must not change a successful download to failed.
+        }
+      }
       if (mounted) {
         setState(() {
-          _message = 'اكتمل تنزيل ${p.basename(file.path)} (${_formatBytes(size)}).';
+          _message = folderCopyError == null
+              ? 'اكتمل تنزيل ${p.basename(file.path)} (${_formatBytes(size)}).'
+              : 'اكتمل التنزيل داخل التطبيق، لكن تعذر النسخ إلى المجلد المحدد: $folderCopyError';
         });
       }
     } catch (error) {
@@ -129,6 +183,17 @@ class _AppShellState extends State<AppShell> {
         await _refresh();
       } catch (_) {
         // Preserve the original download error if the database is unavailable.
+      }
+      if (_notificationsEnabled && !cancelled) {
+        try {
+          await DownloadNotificationService.show(
+            id: id,
+            title: 'تعذر إكمال التنزيل',
+            body: error.toString().replaceFirst('HttpException: ', ''),
+          );
+        } catch (_) {
+          // Ignore notification failures.
+        }
       }
       if (mounted) {
         setState(() {
@@ -526,6 +591,7 @@ class _AppShellState extends State<AppShell> {
         '${row['platform']} • ${row['status']}'
         '${row['file_size'] is int && (row['file_size'] as int) > 0 ? '\\nالحجم: ${_formatBytes(row['file_size'] as int)}' : ''}'
         '${(row['file_path'] ?? '').toString().isNotEmpty ? '\\nالملف: ${(row['file_path'] ?? '').toString()}' : ''}'
+        '${(row['destination_uri'] ?? '').toString().isNotEmpty ? '\\nنسخة محفوظة في المجلد المحدد' : ''}'
         '\\n${row['url']}',
         maxLines: 4,
         overflow: TextOverflow.ellipsis,
@@ -576,6 +642,54 @@ class _AppShellState extends State<AppShell> {
     ..._downloads.map(_downloadTile),
   ]);
 
+  Future<void> _chooseSaveFolder(BuildContext sheetContext) async {
+    try {
+      final selected = await DocMan.pick.directory();
+      if (selected == null) {
+        return;
+      }
+      final uri = selected.uri;
+      if (uri.isEmpty) {
+        throw Exception('لم يُرجع منتقي المجلد عنوانًا صالحًا.');
+      }
+      await SettingsService.saveSaveFolder(uri: uri, name: selected.name);
+      if (!mounted || !sheetContext.mounted) return;
+      setState(() {
+        _saveFolderUri = uri;
+        _saveFolderName = selected.name;
+      });
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ مجلد التنزيلات.')),
+      );
+    } catch (error) {
+      if (sheetContext.mounted) {
+        ScaffoldMessenger.of(sheetContext).showSnackBar(
+          SnackBar(content: Text('تعذر اختيار المجلد: $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleNotifications(
+    bool enabled,
+    BuildContext sheetContext,
+  ) async {
+    if (enabled) {
+      final granted = await DownloadNotificationService.requestPermission();
+      if (!granted) {
+        if (mounted) setState(() => _notificationsEnabled = false);
+        if (sheetContext.mounted) {
+          ScaffoldMessenger.of(sheetContext).showSnackBar(
+            const SnackBar(content: Text('لم يتم منح إذن الإشعارات.')),
+          );
+        }
+        return;
+      }
+    }
+    await SettingsService.saveNotificationsEnabled(enabled);
+    if (mounted) setState(() => _notificationsEnabled = enabled);
+  }
+
   Future<void> _openSettings() async {
     await showModalBottomSheet<void>(
       context: context, showDragHandle: true, isScrollControlled: true,
@@ -588,8 +702,20 @@ class _AppShellState extends State<AppShell> {
           RadioListTile<ThemeMode>(value: ThemeMode.light, groupValue: widget.themeMode, title: const Text('الوضع النهاري'), onChanged: (v) { if (v != null) { widget.onThemeChanged(v); Navigator.pop(context); } }),
           RadioListTile<ThemeMode>(value: ThemeMode.dark, groupValue: widget.themeMode, title: const Text('الوضع الليلي'), onChanged: (v) { if (v != null) { widget.onThemeChanged(v); Navigator.pop(context); } }),
           const Divider(),
-          const ListTile(leading: Icon(Icons.folder_outlined), title: Text('مجلد الحفظ'), subtitle: Text('إعداد مجلد الحفظ يحتاج إلى صلاحيات Android وربط إدارة الملفات.')),
-          const ListTile(leading: Icon(Icons.notifications_active_outlined), title: Text('إشعارات التنزيل'), subtitle: Text('ستُفعّل عند إضافة محرك تنزيل فعلي.')),
+          ListTile(
+            leading: const Icon(Icons.folder_outlined),
+            title: const Text('مجلد الحفظ'),
+            subtitle: Text(_saveFolderName),
+            trailing: const Icon(Icons.folder_open),
+            onTap: () => _chooseSaveFolder(context),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.notifications_active_outlined),
+            title: const Text('إشعارات التنزيل'),
+            subtitle: const Text('إشعار عند اكتمال التنزيل أو فشله'),
+            value: _notificationsEnabled,
+            onChanged: (enabled) => _toggleNotifications(enabled, context),
+          ),
           const ListTile(leading: Icon(Icons.key_outlined), title: Text('مفتاح YouTube Data API'), subtitle: Text('للبحث الحقيقي، أنشئ مفتاحًا في Google Cloud وفعّل YouTube Data API v3.')),
           TextFormField(initialValue: _apiKey, obscureText: true, decoration: const InputDecoration(labelText: 'API Key', hintText: 'أدخل مفتاح YouTube Data API'), onChanged: (v) => _apiKey = v.trim()),
           const SizedBox(height: 8),
