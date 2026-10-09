@@ -215,15 +215,6 @@ class _AppShellState extends State<AppShell> {
     ? 'اكتب كلمات البحث أولًا.'
     : 'البحث الحي غير مفعّل بعد. يلزم إعداد API رسمي للحصول على نتائج حقيقية.');
 
-  Widget _libraryPage() => ListView(padding: const EdgeInsets.all(18), children: [
-    Row(children: [const Expanded(child: Text('تم تنزيلها', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800))), IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh))]),
-    const SizedBox(height: 4),
-    const Text('سجل الروابط المحفوظة محليًا. هذه القائمة لا تعني أن ملفات الفيديو قد نُزّلت.'),
-    const SizedBox(height: 14),
-    if (_downloads.isEmpty) const _EmptyState(text: 'مكتبتك فارغة. أرسل رابطًا لإضافته إلى السجل.'),
-    ..._downloads.map(_downloadTile),
-  ]);
-
   Widget _downloadTile(Map<String, Object?> row) => Card(
     margin: const EdgeInsets.only(bottom: 9),
     child: ListTile(
