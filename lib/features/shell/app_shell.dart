@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:path/path.dart' as p;
+import '../../services/download/direct_media_downloader.dart';
+import '../../services/search/youtube_search_service.dart';
+import '../../services/settings_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/database/download_database.dart';
 import '../../services/platform_resolver/platform_resolver.dart';
@@ -20,8 +24,13 @@ class _AppShellState extends State<AppShell> {
   bool _busy = false;
   List<Map<String, Object?>> _downloads = [];
   String _message = '';
+  bool _searching = false;
+  List<YouTubeVideo> _searchResults = [];
+  String _apiKey = '';
+  double? _downloadProgress;
   @override
-  void initState() { super.initState(); _refresh(); }
+  @override
+  void initState() { super.initState(); _refresh(); SettingsService.loadYouTubeApiKey().then((key) { if (mounted) setState(() => _apiKey = key); }); }
   @override
   void dispose() { _url.dispose(); _search.dispose(); super.dispose(); }
 
@@ -32,6 +41,34 @@ class _AppShellState extends State<AppShell> {
     } catch (_) {
       if (mounted) setState(() => _message = 'تعذر فتح سجل التنزيلات المحلي.');
     }
+  }
+
+  Future<void> _runYouTubeSearch() async {
+    final query = _search.text.trim();
+    if (query.isEmpty) { setState(() => _message = 'اكتب كلمات البحث أولًا.'); return; }
+    if (_apiKey.isEmpty) { setState(() => _message = 'أضف مفتاح YouTube Data API من الإعدادات أولًا.'); return; }
+    setState(() { _searching = true; _message = ''; _searchResults = []; });
+    try {
+      final results = await YouTubeSearchService().search(query: query, apiKey: _apiKey);
+      if (mounted) setState(() { _searchResults = results; _message = results.isEmpty ? 'لم يتم العثور على نتائج.' : ''; });
+    } catch (e) { if (mounted) setState(() => _message = e.toString().replaceFirst('Exception: ', '')); }
+    finally { if (mounted) setState(() => _searching = false); }
+  }
+
+  Future<void> _downloadDirect(Map<String, Object?> row) async {
+    final id = row['id'];
+    if (id is! int) return;
+    final uri = Uri.tryParse((row['url'] ?? '').toString());
+    if (uri == null) return;
+    setState(() { _busy = true; _downloadProgress = 0; _message = 'جارٍ تنزيل الملف المباشر...'; });
+    try {
+      final downloader = DirectMediaDownloader();
+      final file = await downloader.download(uri: uri, fileName: (row['title'] ?? 'media').toString().replaceAll(RegExp(r'[^a-zA-Z0-9 _.-]'), '_'), onProgress: (received, total) { if (mounted) setState(() => _downloadProgress = total == null || total == 0 ? null : received / total); });
+      await DownloadDatabase.updateDownload(id, status: 'تم التنزيل', filePath: file.path, fileSize: await file.length());
+      await _refresh();
+      if (mounted) setState(() => _message = 'اكتمل تنزيل الملف: ${p.basename(file.path)}');
+    } catch (e) { if (mounted) setState(() => _message = e.toString().replaceFirst('HttpException: ', '')); }
+    finally { if (mounted) setState(() { _busy = false; _downloadProgress = null; }); }
   }
 
   Future<void> _paste() async {
@@ -205,10 +242,11 @@ class _AppShellState extends State<AppShell> {
     const SizedBox(height: 14),
     TextField(controller: _search, textInputAction: TextInputAction.search, onSubmitted: (_) => _showSearchNotice(), decoration: InputDecoration(hintText: 'ابحث في YouTube...', prefixIcon: const Icon(Icons.search), suffixIcon: IconButton(onPressed: () => setState(_search.clear), icon: const Icon(Icons.close)))),
     const SizedBox(height: 10),
-    FilledButton.icon(onPressed: _showSearchNotice, icon: const Icon(Icons.search), label: const Text('بحث')),
+    FilledButton.icon(onPressed: _searching ? null : _runYouTubeSearch, icon: _searching ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search), label: const Text('بحث حقيقي في YouTube')),
     const SizedBox(height: 14),
-    const _InfoCard(icon: Icons.public, title: 'البحث المباشر', body: 'واجهة البحث جاهزة، لكن النتائج الحقيقية تتطلب ربط YouTube Data API أو خدمة بحث موثوقة. لا نعرض نتائج تجريبية على أنها حقيقية.'),
     if (_message.isNotEmpty) _MessageCard(message: _message),
+    if (_searchResults.isNotEmpty) ..._searchResults.map((video) => Card(margin: const EdgeInsets.only(bottom: 10), child: ListTile(leading: video.thumbnail.isEmpty ? const Icon(Icons.play_circle_outline) : Image.network(video.thumbnail, width: 84, height: 60, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.play_circle_outline)), title: Text(video.title, maxLines: 2, overflow: TextOverflow.ellipsis), subtitle: Text(video.channel), trailing: IconButton(icon: const Icon(Icons.open_in_new), onPressed: () => Share.share(video.watchUrl)), onTap: () async { final id = await DownloadDatabase.add(url: video.watchUrl, platform: 'YouTube', title: video.title, status: 'رابط محفوظ - يلزم مصدر تنزيل متوافق'); await _refresh(); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم حفظ رابط الفيديو في المكتبة'))); }))),
+    if (_searchResults.isEmpty && _message.isEmpty) const _InfoCard(icon: Icons.public, title: 'البحث المباشر', body: 'يعرض نتائج YouTube الحقيقية باستخدام YouTube Data API بعد إضافة مفتاح API من الإعدادات.'),
   ]);
 
   void _showSearchNotice() => setState(() => _message = _search.text.trim().isEmpty
@@ -226,11 +264,13 @@ class _AppShellState extends State<AppShell> {
         onSelected: (value) async {
           if (value == 'share') await Share.share((row['url'] ?? '').toString());
           if (value == 'copy') { await Clipboard.setData(ClipboardData(text: (row['url'] ?? '').toString())); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ الرابط'))); }
+          if (value == 'download') await _downloadDirect(row);
           if (value == 'delete') { final id = row['id']; if (id is int) await DownloadDatabase.delete(id); await _refresh(); }
         },
         itemBuilder: (_) => const [
           PopupMenuItem(value: 'share', child: Text('مشاركة الرابط')),
           PopupMenuItem(value: 'copy', child: Text('نسخ الرابط')),
+          PopupMenuItem(value: 'download', child: Text('تنزيل ملف مباشر')),
           PopupMenuItem(value: 'delete', child: Text('حذف من السجل')),
         ],
       ),
@@ -240,7 +280,9 @@ class _AppShellState extends State<AppShell> {
   Widget _downloadsPage() => ListView(padding: const EdgeInsets.all(18), children: [
     const Text('التنزيلات', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
     const SizedBox(height: 12),
-    const _InfoCard(icon: Icons.downloading, title: 'إدارة التنزيلات', body: 'يمكنك هنا متابعة الروابط التي أضفتها. محرك التنزيل الفعلي لم يُربط بعد، لذلك لا توجد نسبة تقدم مصطنعة.'),
+    const _InfoCard(icon: Icons.downloading, title: 'إدارة التنزيلات', body: 'يمكن تنزيل الروابط المباشرة لملفات الصوت والفيديو. روابط صفحات YouTube وTikTok وغيرها ليست روابط ملفات مباشرة وتحتاج إلى مصدر رسمي متوافق.'),
+    if (_busy && _downloadProgress != null) LinearProgressIndicator(value: _downloadProgress),
+    if (_message.isNotEmpty) _MessageCard(message: _message),
     if (_downloads.isEmpty) const _EmptyState(text: 'لا توجد روابط في القائمة.'),
     ..._downloads.map(_downloadTile),
   ]);
@@ -259,6 +301,11 @@ class _AppShellState extends State<AppShell> {
           const Divider(),
           const ListTile(leading: Icon(Icons.folder_outlined), title: Text('مجلد الحفظ'), subtitle: Text('إعداد مجلد الحفظ يحتاج إلى صلاحيات Android وربط إدارة الملفات.')),
           const ListTile(leading: Icon(Icons.notifications_active_outlined), title: Text('إشعارات التنزيل'), subtitle: Text('ستُفعّل عند إضافة محرك تنزيل فعلي.')),
+          const ListTile(leading: Icon(Icons.key_outlined), title: Text('مفتاح YouTube Data API'), subtitle: Text('للبحث الحقيقي، أنشئ مفتاحًا في Google Cloud وفعّل YouTube Data API v3.')),
+          TextFormField(initialValue: _apiKey, obscureText: true, decoration: const InputDecoration(labelText: 'API Key', hintText: 'أدخل مفتاح YouTube Data API'), onChanged: (v) => _apiKey = v.trim()),
+          const SizedBox(height: 8),
+          FilledButton(onPressed: () async { await SettingsService.saveYouTubeApiKey(_apiKey); if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(content: Text('تم حفظ مفتاح البحث على الجهاز'))); } }, child: const Text('حفظ إعدادات البحث')),
+          const SizedBox(height: 8),
           const ListTile(leading: Icon(Icons.info_outline), title: Text('حول SamirNet Videos'), subtitle: Text('الإصدار 1.0.0 • Flutter')),
         ]),
       ),
