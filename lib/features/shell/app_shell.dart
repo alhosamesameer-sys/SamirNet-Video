@@ -71,6 +71,20 @@ class _AppShellState extends State<AppShell> {
     finally { if (mounted) setState(() { _busy = false; _downloadProgress = null; }); }
   }
 
+  String? _extractYouTubeId(Uri uri) {
+    final host = uri.host.toLowerCase().replaceFirst(RegExp(r'^www\\.'), '');
+    if (host == 'youtu.be') {
+      return uri.pathSegments.isEmpty ? null : uri.pathSegments.first;
+    }
+    if (host.endsWith('youtube.com')) {
+      if (uri.path == '/watch') return uri.queryParameters['v'];
+      if (uri.pathSegments.length >= 2 && {'shorts', 'embed', 'live'}.contains(uri.pathSegments.first)) {
+        return uri.pathSegments[1];
+      }
+    }
+    return null;
+  }
+
   Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data?.text != null && mounted) setState(() => _url.text = data!.text!.trim());
@@ -91,18 +105,32 @@ class _AppShellState extends State<AppShell> {
     setState(() { _busy = true; _message = ''; });
     try {
       final label = PlatformResolver.label(platform);
-      await DownloadDatabase.add(
-        url: uri.toString(),
-        platform: label,
-        title: 'رابط من $label',
-        status: 'جاهز للتحليل',
-      );
+      var title = 'رابط من $label';
+      var status = 'جاهز للتحليل';
+      YouTubeVideo? videoDetails;
+      if (platform == MediaPlatform.youtube && _apiKey.isNotEmpty) {
+        final videoId = _extractYouTubeId(uri);
+        if (videoId != null) {
+          try {
+            videoDetails = await YouTubeSearchService().getVideoDetails(videoId: videoId, apiKey: _apiKey);
+            if (videoDetails != null) {
+              title = videoDetails.title;
+              status = 'تم جلب بيانات الفيديو';
+            }
+          } catch (_) {
+            status = 'تم حفظ الرابط - تعذر جلب البيانات';
+          }
+        }
+      }
+      await DownloadDatabase.add(url: uri.toString(), platform: label, title: title, status: status);
       await _refresh();
       if (!mounted) return;
       setState(() {
         _message = platform == MediaPlatform.direct
-          ? 'تم حفظ الرابط. لم نتحقق بعد من أنه ملف وسائط مباشر.'
-          : 'تم التعرف على $label وحفظ الرابط في السجل. تحليل الفيديو والتنزيل الفعلي يحتاجان إلى موفّر متوافق؛ لم يبدأ تنزيل وهمي.';
+          ? 'تم حفظ الرابط. سيُتحقق من نوع الملف عند بدء التنزيل.'
+          : platform == MediaPlatform.youtube && videoDetails != null
+            ? 'تم جلب بيانات الفيديو الحقيقية: ${videoDetails.title} • المدة ${_formatDuration(videoDetails.duration).isEmpty ? 'غير متاحة' : _formatDuration(videoDetails.duration)}. بيانات الفيديو لا توفر رابط ملف للتنزيل أو جودات التحميل.'
+            : 'تم التعرف على $label وحفظ الرابط. بيانات الفيديو والتنزيل من صفحة المنصة تعتمد على API/موفّر متوافق؛ لم يبدأ تنزيل وهمي.';
       });
     } catch (_) {
       if (mounted) setState(() => _message = 'تعذر حفظ الرابط محليًا. تحقق من صلاحية قاعدة البيانات.');
