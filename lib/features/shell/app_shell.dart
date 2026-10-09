@@ -658,7 +658,7 @@ class _AppShellState extends State<AppShell> {
         _saveFolderUri = uri;
         _saveFolderName = selected.name;
       });
-      ScaffoldMessenger.of(this.context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم حفظ مجلد التنزيلات.')),
       );
     } catch (error) {
