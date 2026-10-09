@@ -72,7 +72,7 @@ class _AppShellState extends State<AppShell> {
   }
 
   String? _extractYouTubeId(Uri uri) {
-    final host = uri.host.toLowerCase().replaceFirst(RegExp(r'^www\\.'), '');
+    final host = uri.host.toLowerCase().replaceFirst(RegExp(r'^www\.'), '');
     if (host == 'youtu.be') {
       return uri.pathSegments.isEmpty ? null : uri.pathSegments.first;
     }
@@ -324,7 +324,15 @@ class _AppShellState extends State<AppShell> {
   }
 
   String _formatDuration(String iso) {
-    final match = RegExp(r'^PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?
+    final match = RegExp(r'^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$').firstMatch(iso);
+    if (match == null) return iso;
+    final hours = int.tryParse(match.group(1) ?? '0') ?? 0;
+    final minutes = int.tryParse(match.group(2) ?? '0') ?? 0;
+    final seconds = int.tryParse(match.group(3) ?? '0') ?? 0;
+    final mm = minutes.toString().padLeft(2, '0');
+    final ss = seconds.toString().padLeft(2, '0');
+    return hours > 0 ? '$hours:$mm:$ss' : '$minutes:$ss';
+  }
 
   Widget _downloadTile(Map<String, Object?> row) => Card(
     margin: const EdgeInsets.only(bottom: 9),
@@ -378,115 +386,6 @@ class _AppShellState extends State<AppShell> {
           TextFormField(initialValue: _apiKey, obscureText: true, decoration: const InputDecoration(labelText: 'API Key', hintText: 'أدخل مفتاح YouTube Data API'), onChanged: (v) => _apiKey = v.trim()),
           const SizedBox(height: 8),
           FilledButton(onPressed: () async { final messenger = ScaffoldMessenger.of(this.context); await SettingsService.saveYouTubeApiKey(_apiKey); if (!mounted) return; Navigator.pop(context); messenger.showSnackBar(const SnackBar(content: Text('تم حفظ مفتاح البحث على الجهاز'))); }, child: const Text('حفظ إعدادات البحث')),
-          const SizedBox(height: 8),
-          const ListTile(leading: Icon(Icons.info_outline), title: Text('حول SamirNet Videos'), subtitle: Text('الإصدار 1.0.0 • Flutter')),
-        ]),
-      ),
-    );
-  }
-}
-
-class _Brand extends StatelessWidget {
-  const _Brand();
-  @override
-  Widget build(BuildContext context) => Row(children: [
-    Container(width: 34, height: 34, decoration: BoxDecoration(color: AppTheme.red, borderRadius: BorderRadius.circular(11)), child: const Icon(Icons.download_rounded, color: Colors.white, size: 23)),
-    const SizedBox(width: 8),
-    const Text('Samir', style: TextStyle(fontWeight: FontWeight.w900)),
-    const Text('Net', style: TextStyle(color: AppTheme.red, fontWeight: FontWeight.w900)),
-  ]);
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.text});
-  final String text;
-  @override
-  Widget build(BuildContext context) => Card(child: Padding(padding: const EdgeInsets.all(24), child: Center(child: Column(children: [const Icon(Icons.video_library_outlined, size: 38, color: AppTheme.muted), const SizedBox(height: 8), Text(text, textAlign: TextAlign.center)]))));
-}
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({required this.icon, required this.title, required this.body});
-  final IconData icon; final String title; final String body;
-  @override
-  Widget build(BuildContext context) => Card(child: Padding(padding: const EdgeInsets.all(14), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, color: AppTheme.red), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w800)), const SizedBox(height: 4), Text(body)]))])));
-}
-class _PlatformChip extends StatelessWidget {
-  const _PlatformChip(this.label);
-  final String label;
-  @override
-  Widget build(BuildContext context) => Chip(avatar: const Icon(Icons.public, size: 17), label: Text(label));
-}
-class _PlatformIcon extends StatelessWidget {
-  const _PlatformIcon({required this.label, required this.icon, required this.color});
-  final String label; final IconData icon; final Color color;
-  @override
-  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [Container(width: 42, height: 42, decoration: BoxDecoration(color: color.withValues(alpha: .10), borderRadius: BorderRadius.circular(14)), child: Icon(icon, color: color)), const SizedBox(height: 4), Text(label, style: const TextStyle(fontSize: 10))]);
-}
-class _MessageCard extends StatelessWidget {
-  const _MessageCard({required this.message});
-  final String message;
-  @override
-  Widget build(BuildContext context) => Card(color: Theme.of(context).colorScheme.surfaceContainerHighest, child: Padding(padding: const EdgeInsets.all(14), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [const Icon(Icons.info_outline, color: AppTheme.red), const SizedBox(width: 10), Expanded(child: Text(message))])));
-}
-).firstMatch(iso);
-    if (match == null) return iso;
-    final h = int.tryParse(match.group(1) ?? '0') ?? 0;
-    final m = int.tryParse(match.group(2) ?? '0') ?? 0;
-    final sec = int.tryParse(match.group(3) ?? '0') ?? 0;
-    return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}' : '$m:${sec.toString().padLeft(2, '0')}';
-  }
-
-  Widget _downloadTile(Map<String, Object?> row) => Card(
-    margin: const EdgeInsets.only(bottom: 9),
-    child: ListTile(
-      leading: Container(width: 46, height: 46, decoration: BoxDecoration(color: AppTheme.red.withValues(alpha: .10), borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.play_arrow_rounded, color: AppTheme.red, size: 30)),
-      title: Text((row['title'] ?? 'رابط فيديو').toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text('${row['platform']} • ${row['status']}\n${row['url']}', maxLines: 2, overflow: TextOverflow.ellipsis),
-      isThreeLine: true,
-      trailing: PopupMenuButton<String>(
-        onSelected: (value) async {
-          if (value == 'share') await Share.share((row['url'] ?? '').toString());
-          if (value == 'copy') { await Clipboard.setData(ClipboardData(text: (row['url'] ?? '').toString())); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ الرابط'))); }
-          if (value == 'download') await _downloadDirect(row);
-          if (value == 'delete') { final id = row['id']; if (id is int) await DownloadDatabase.delete(id); await _refresh(); }
-        },
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'share', child: Text('مشاركة الرابط')),
-          PopupMenuItem(value: 'copy', child: Text('نسخ الرابط')),
-          PopupMenuItem(value: 'download', child: Text('تنزيل ملف مباشر')),
-          PopupMenuItem(value: 'delete', child: Text('حذف من السجل')),
-        ],
-      ),
-    ),
-  );
-
-  Widget _downloadsPage() => ListView(padding: const EdgeInsets.all(18), children: [
-    const Text('التنزيلات', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-    const SizedBox(height: 12),
-    const _InfoCard(icon: Icons.downloading, title: 'إدارة التنزيلات', body: 'يمكن تنزيل الروابط المباشرة لملفات الصوت والفيديو. روابط صفحات YouTube وTikTok وغيرها ليست روابط ملفات مباشرة وتحتاج إلى مصدر رسمي متوافق.'),
-    if (_busy && _downloadProgress != null) LinearProgressIndicator(value: _downloadProgress),
-    if (_message.isNotEmpty) _MessageCard(message: _message),
-    if (_downloads.isEmpty) const _EmptyState(text: 'لا توجد روابط في القائمة.'),
-    ..._downloads.map(_downloadTile),
-  ]);
-
-  Future<void> _openSettings() async {
-    await showModalBottomSheet<void>(
-      context: context, showDragHandle: true, isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('الإعدادات', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 12), const Text('المظهر'),
-          RadioListTile<ThemeMode>(value: ThemeMode.system, groupValue: widget.themeMode, title: const Text('حسب النظام'), onChanged: (v) { if (v != null) { widget.onThemeChanged(v); Navigator.pop(context); } }),
-          RadioListTile<ThemeMode>(value: ThemeMode.light, groupValue: widget.themeMode, title: const Text('الوضع النهاري'), onChanged: (v) { if (v != null) { widget.onThemeChanged(v); Navigator.pop(context); } }),
-          RadioListTile<ThemeMode>(value: ThemeMode.dark, groupValue: widget.themeMode, title: const Text('الوضع الليلي'), onChanged: (v) { if (v != null) { widget.onThemeChanged(v); Navigator.pop(context); } }),
-          const Divider(),
-          const ListTile(leading: Icon(Icons.folder_outlined), title: Text('مجلد الحفظ'), subtitle: Text('إعداد مجلد الحفظ يحتاج إلى صلاحيات Android وربط إدارة الملفات.')),
-          const ListTile(leading: Icon(Icons.notifications_active_outlined), title: Text('إشعارات التنزيل'), subtitle: Text('ستُفعّل عند إضافة محرك تنزيل فعلي.')),
-          const ListTile(leading: Icon(Icons.key_outlined), title: Text('مفتاح YouTube Data API'), subtitle: Text('للبحث الحقيقي، أنشئ مفتاحًا في Google Cloud وفعّل YouTube Data API v3.')),
-          TextFormField(initialValue: _apiKey, obscureText: true, decoration: const InputDecoration(labelText: 'API Key', hintText: 'أدخل مفتاح YouTube Data API'), onChanged: (v) => _apiKey = v.trim()),
-          const SizedBox(height: 8),
-          FilledButton(onPressed: () async { await SettingsService.saveYouTubeApiKey(_apiKey); if (context.mounted) { Navigator.pop(context); ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(content: Text('تم حفظ مفتاح البحث على الجهاز'))); } }, child: const Text('حفظ إعدادات البحث')),
           const SizedBox(height: 8),
           const ListTile(leading: Icon(Icons.info_outline), title: Text('حول SamirNet Videos'), subtitle: Text('الإصدار 1.0.0 • Flutter')),
         ]),
