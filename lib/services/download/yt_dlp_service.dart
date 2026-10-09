@@ -76,7 +76,7 @@ class YtDlpService {
         final value = event['progress'];
         final percent = value is num ? value.toDouble() : -1.0;
         onProgress(
-          percent < 0 ? null : (percent / 100).clamp(0.0, 1.0),
+          percent < 0 ? null : (percent / 100).clamp(0.0, 1.0).toDouble(),
           event['etaSeconds'] is num
               ? (event['etaSeconds'] as num).toInt()
               : null,
