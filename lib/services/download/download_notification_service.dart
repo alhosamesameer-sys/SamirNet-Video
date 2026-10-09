@@ -8,7 +8,7 @@ class DownloadNotificationService {
 
   static Future<void> initialize() async {
     await _plugin.initialize(
-      settings: const InitializationSettings(
+      const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
     );
