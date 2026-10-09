@@ -280,7 +280,7 @@ class _AppShellState extends State<AppShell> {
             _message = fraction == null
                 ? 'جارٍ التنزيل...'
                 : 'جارٍ التنزيل: ${(fraction * 100).toStringAsFixed(1)}%'
-                    '${eta != null && eta > 0 ? ' • متبقٍ نحو ${eta} ثانية' : ''}';
+                    '${eta != null && eta > 0 ? ' • متبقٍ نحو $eta ثانية' : ''}';
           });
         },
       );
@@ -501,19 +501,6 @@ class _AppShellState extends State<AppShell> {
     if (mounted) await _showDownloadChoices(row);
   }
 
-  String? _extractYouTubeId(Uri uri) {
-    final host = uri.host.toLowerCase().replaceFirst(RegExp(r'^www\.'), '');
-    if (host == 'youtu.be') {
-      return uri.pathSegments.isEmpty ? null : uri.pathSegments.first;
-    }
-    if (host.endsWith('youtube.com')) {
-      if (uri.path == '/watch') return uri.queryParameters['v'];
-      if (uri.pathSegments.length >= 2 && {'shorts', 'embed', 'live'}.contains(uri.pathSegments.first)) {
-        return uri.pathSegments[1];
-      }
-    }
-    return null;
-  }
 
   Future<void> _inspectSource(Map<String, Object?> row) async {
     if (_busy) return;
@@ -649,7 +636,7 @@ class _AppShellState extends State<AppShell> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-    if (!mounted || rowId == null || info == null) return;
+    if (!mounted) return;
     _url.clear();
     final row = _downloads.firstWhere(
       (item) => item['id'] == rowId,
