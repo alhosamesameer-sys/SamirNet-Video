@@ -29,7 +29,6 @@ class _AppShellState extends State<AppShell> {
   String _apiKey = '';
   double? _downloadProgress;
   @override
-  @override
   void initState() { super.initState(); _refresh(); SettingsService.loadYouTubeApiKey().then((key) { if (mounted) setState(() => _apiKey = key); }); }
   @override
   void dispose() { _url.dispose(); _search.dispose(); super.dispose(); }
