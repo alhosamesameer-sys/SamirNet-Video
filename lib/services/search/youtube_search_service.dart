@@ -20,9 +20,10 @@ class YouTubeVideo {
     final snippet = (json['snippet'] as Map<String, dynamic>?) ?? const {};
     final thumbnails = (snippet['thumbnails'] as Map<String, dynamic>?) ?? const {};
     final medium = (thumbnails['high'] ?? thumbnails['medium'] ?? thumbnails['default']) as Map<String, dynamic>?;
-    final idObject = (json['id'] as Map<String, dynamic>?) ?? const {};
+    final rawId = json['id'];
+    final idObject = rawId is Map<String, dynamic> ? rawId : const <String, dynamic>{};
     return YouTubeVideo(
-      id: (idObject['videoId'] ?? json['id'] ?? '').toString(),
+      id: (idObject['videoId'] ?? (rawId is String ? rawId : '')).toString(),
       title: (snippet['title'] ?? 'بدون عنوان').toString(),
       channel: (snippet['channelTitle'] ?? '').toString(),
       thumbnail: (medium?['url'] ?? '').toString(),
