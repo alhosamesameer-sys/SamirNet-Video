@@ -836,8 +836,11 @@ class _AppShellState extends State<AppShell> {
       }
     }
     if (!mounted) return;
-    List<YouTubeVideo> related = [];
-    if (_apiKey.isNotEmpty) {
+    List<YouTubeVideo> related = _searchResults
+        .where((item) => item.id != details.id)
+        .take(5)
+        .toList();
+    if (related.isEmpty && _apiKey.isNotEmpty) {
       try {
         related = await YouTubeSearchService().search(
           query: '${details.title} ${details.channel}',
