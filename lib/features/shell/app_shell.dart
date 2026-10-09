@@ -29,6 +29,10 @@ class _AppShellState extends State<AppShell> {
   List<YouTubeVideo> _searchResults = [];
   String _apiKey = '';
   double? _downloadProgress;
+  DirectMediaDownloader? _activeDownloader;
+  bool _cancelRequested = false;
+  int _downloadReceived = 0;
+  int? _downloadTotal;
   @override
   void initState() { super.initState(); _refresh(); SettingsService.loadYouTubeApiKey().then((key) { if (mounted) setState(() => _apiKey = key); }); }
   @override
@@ -56,19 +60,108 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _downloadDirect(Map<String, Object?> row) async {
+    if (_busy) return;
     final id = row['id'];
     if (id is! int) return;
-    final uri = Uri.tryParse((row['url'] ?? '').toString());
-    if (uri == null) return;
-    setState(() { _busy = true; _downloadProgress = 0; _message = 'جارٍ تنزيل الملف المباشر...'; });
+    final uri = PlatformResolver.parseHttpUrl((row['url'] ?? '').toString());
+    if (uri == null) {
+      setState(() => _message = 'الرابط المحفوظ غير صالح.');
+      return;
+    }
+
+    final downloader = DirectMediaDownloader();
+    _activeDownloader = downloader;
+    _cancelRequested = false;
+    setState(() {
+      _busy = true;
+      _downloadProgress = null;
+      _downloadReceived = 0;
+      _downloadTotal = null;
+      _message = 'جارٍ فحص الملف وبدء التنزيل...';
+    });
+
     try {
-      final downloader = DirectMediaDownloader();
-      final file = await downloader.download(uri: uri, fileName: (row['title'] ?? 'media').toString().replaceAll(RegExp(r'[^a-zA-Z0-9 _.-]'), '_'), onProgress: (received, total) { if (mounted) setState(() => _downloadProgress = total == null || total == 0 ? null : received / total); });
-      await DownloadDatabase.updateDownload(id, status: 'تم التنزيل', filePath: file.path, fileSize: await file.length());
+      await DownloadDatabase.updateDownload(
+        id,
+        status: 'جارٍ التنزيل',
+        filePath: '',
+        fileSize: 0,
+      );
       await _refresh();
-      if (mounted) setState(() => _message = 'اكتمل تنزيل الملف: ${p.basename(file.path)}');
-    } catch (e) { if (mounted) setState(() => _message = e.toString().replaceFirst('HttpException: ', '')); }
-    finally { if (mounted) setState(() { _busy = false; _downloadProgress = null; }); }
+      final file = await downloader.download(
+        uri: uri,
+        fileName: (row['title'] ?? 'media')
+            .toString()
+            .replaceAll(RegExp(r'[^a-zA-Z0-9 _.-]'), '_'),
+        onProgress: (received, total) {
+          if (!mounted) return;
+          setState(() {
+            _downloadReceived = received;
+            _downloadTotal = total;
+            _downloadProgress =
+                total == null || total <= 0 ? null : received / total;
+          });
+        },
+      );
+      final size = await file.length();
+      await DownloadDatabase.updateDownload(
+        id,
+        status: 'اكتمل التنزيل',
+        filePath: file.path,
+        fileSize: size,
+      );
+      await _refresh();
+      if (mounted) {
+        setState(() {
+          _message = 'اكتمل تنزيل ${p.basename(file.path)} (${_formatBytes(size)}).';
+        });
+      }
+    } catch (error) {
+      final cancelled = _cancelRequested;
+      try {
+        await DownloadDatabase.updateDownload(
+          id,
+          status: cancelled ? 'أُلغي التنزيل' : 'فشل التنزيل',
+          filePath: '',
+          fileSize: 0,
+        );
+        await _refresh();
+      } catch (_) {
+        // Preserve the original download error if the database is unavailable.
+      }
+      if (mounted) {
+        setState(() {
+          _message = cancelled
+              ? 'تم إلغاء التنزيل وحذف الملف الجزئي.'
+              : error
+                  .toString()
+                  .replaceFirst('HttpException: ', '')
+                  .replaceFirst('ClientException: ', '');
+        });
+      }
+    } finally {
+      downloader.close();
+      if (identical(_activeDownloader, downloader)) {
+        _activeDownloader = null;
+      }
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _downloadProgress = null;
+          _downloadReceived = 0;
+          _downloadTotal = null;
+        });
+      }
+    }
+  }
+
+  void _cancelDownload() {
+    if (!_busy || _activeDownloader == null) return;
+    _cancelRequested = true;
+    _activeDownloader!.close();
+    if (mounted) {
+      setState(() => _message = 'جارٍ إلغاء التنزيل وتنظيف الملف الجزئي...');
+    }
   }
 
   String? _extractYouTubeId(Uri uri) {
@@ -337,12 +430,28 @@ class _AppShellState extends State<AppShell> {
     return hours > 0 ? '$hours:$mm:$ss' : '$minutes:$ss';
   }
 
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
   Widget _downloadTile(Map<String, Object?> row) => Card(
     margin: const EdgeInsets.only(bottom: 9),
     child: ListTile(
       leading: Container(width: 46, height: 46, decoration: BoxDecoration(color: AppTheme.red.withValues(alpha: .10), borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.play_arrow_rounded, color: AppTheme.red, size: 30)),
       title: Text((row['title'] ?? 'رابط فيديو').toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text('${row['platform']} • ${row['status']}\n${row['url']}', maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        '${row['platform']} • ${row['status']}'
+        '${row['file_size'] is int && (row['file_size'] as int) > 0 ? '\\nالحجم: ${_formatBytes(row['file_size'] as int)}' : ''}'
+        '${(row['file_path'] ?? '').toString().isNotEmpty ? '\\nالملف: ${(row['file_path'] ?? '').toString()}' : ''}'
+        '\\n${row['url']}',
+        maxLines: 4,
+        overflow: TextOverflow.ellipsis,
+      ),
       isThreeLine: true,
       trailing: PopupMenuButton<String>(
         onSelected: (value) async {
@@ -365,7 +474,23 @@ class _AppShellState extends State<AppShell> {
     const Text('التنزيلات', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
     const SizedBox(height: 12),
     const _InfoCard(icon: Icons.downloading, title: 'إدارة التنزيلات', body: 'يمكن تنزيل الروابط المباشرة لملفات الصوت والفيديو. روابط صفحات YouTube وTikTok وغيرها ليست روابط ملفات مباشرة وتحتاج إلى مصدر رسمي متوافق.'),
-    if (_busy && _downloadProgress != null) LinearProgressIndicator(value: _downloadProgress),
+    if (_busy) ...[
+      LinearProgressIndicator(value: _downloadProgress),
+      const SizedBox(height: 6),
+      Text(
+        'تم استلام ${_formatBytes(_downloadReceived)}'
+        '${_downloadTotal != null && _downloadTotal! > 0 ? ' من ${_formatBytes(_downloadTotal!)}' : ''}',
+        textAlign: TextAlign.center,
+      ),
+      Align(
+        alignment: Alignment.center,
+        child: TextButton.icon(
+          onPressed: _cancelDownload,
+          icon: const Icon(Icons.cancel_outlined),
+          label: const Text('إلغاء التنزيل'),
+        ),
+      ),
+    ],
     if (_message.isNotEmpty) _MessageCard(message: _message),
     if (_downloads.isEmpty) const _EmptyState(text: 'لا توجد روابط في القائمة.'),
     ..._downloads.map(_downloadTile),
