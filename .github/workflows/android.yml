@@ -33,7 +33,7 @@ jobs:
               text = text.replace("<application", '<application android:extractNativeLibs="true"', 1)
           if permissions:
               text = text.replace("    <application", "\n".join(permissions) + "\n    <application", 1)
-              manifest.write_text(text)
+          manifest.write_text(text)
 
           gradle = Path("android/app/build.gradle.kts")
           text = gradle.read_text()
