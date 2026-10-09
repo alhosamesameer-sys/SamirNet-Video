@@ -18,6 +18,8 @@ dependencies:
   docman: ^1.2.0
   flutter_local_notifications: ^19.4.2
   video_player: ^2.9.2
+  webview_flutter: ^4.10.0
+  ytdlp_flutter: ^0.1.0
   permission_handler: ^11.3.1
 dev_dependencies:
   flutter_test:
