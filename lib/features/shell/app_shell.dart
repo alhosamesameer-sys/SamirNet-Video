@@ -278,8 +278,11 @@ class _AppShellState extends State<AppShell> {
   ]);
 
   void _showSearchNotice() {
-    if (_search.text.trim().isEmpty) setState(() => _message = 'اكتب كلمات البحث أولًا.');
-    else _runYouTubeSearch();
+    if (_search.text.trim().isEmpty) {
+      setState(() => _message = 'اكتب كلمات البحث أولًا.');
+    } else {
+      _runYouTubeSearch();
+    }
   }
 
   Future<void> _showVideoDetails(YouTubeVideo video) async {
@@ -385,7 +388,18 @@ class _AppShellState extends State<AppShell> {
           const ListTile(leading: Icon(Icons.key_outlined), title: Text('مفتاح YouTube Data API'), subtitle: Text('للبحث الحقيقي، أنشئ مفتاحًا في Google Cloud وفعّل YouTube Data API v3.')),
           TextFormField(initialValue: _apiKey, obscureText: true, decoration: const InputDecoration(labelText: 'API Key', hintText: 'أدخل مفتاح YouTube Data API'), onChanged: (v) => _apiKey = v.trim()),
           const SizedBox(height: 8),
-          FilledButton(onPressed: () async { final messenger = ScaffoldMessenger.of(this.context); await SettingsService.saveYouTubeApiKey(_apiKey); if (!mounted) return; Navigator.pop(context); messenger.showSnackBar(const SnackBar(content: Text('تم حفظ مفتاح البحث على الجهاز'))); }, child: const Text('حفظ إعدادات البحث')),
+          FilledButton(
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(this.context);
+              await SettingsService.saveYouTubeApiKey(_apiKey);
+              if (!mounted || !context.mounted) return;
+              Navigator.pop(context);
+              messenger.showSnackBar(
+                const SnackBar(content: Text('تم حفظ مفتاح البحث على الجهاز')),
+              );
+            },
+            child: const Text('حفظ إعدادات البحث'),
+          ),
           const SizedBox(height: 8),
           const ListTile(leading: Icon(Icons.info_outline), title: Text('حول SamirNet Videos'), subtitle: Text('الإصدار 1.0.0 • Flutter')),
         ]),
