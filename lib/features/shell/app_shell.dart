@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as p;
 import '../../services/download/direct_media_downloader.dart';
+import '../../services/download/media_source_inspector.dart';
 import '../../services/search/youtube_search_service.dart';
 import '../../services/settings_service.dart';
 import '../../core/theme/app_theme.dart';
@@ -176,6 +177,83 @@ class _AppShellState extends State<AppShell> {
       }
     }
     return null;
+  }
+
+  Future<void> _inspectSource(Map<String, Object?> row) async {
+    if (_busy) return;
+    final uri = PlatformResolver.parseHttpUrl((row['url'] ?? '').toString());
+    if (uri == null) {
+      setState(() => _message = 'الرابط المحفوظ غير صالح.');
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _message = 'جارٍ فحص الصيغ المتاحة من المصدر...';
+    });
+    late final MediaSourceInspection inspection;
+    try {
+      inspection = await MediaSourceInspector().inspect(uri);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _message = '';
+        });
+      }
+    }
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('مصدر التنزيل: ${inspection.sourceName}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(inspection.message),
+              if (inspection.formats.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'الصيغ التي أكدها الخادم',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 6),
+                ...inspection.formats.map(
+                  (format) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.video_file_outlined),
+                    title: Text(format.label),
+                    subtitle: Text(
+                      '${format.mimeType}\n'
+                      '${format.fileSize == null ? 'الحجم غير معلن' : _formatBytes(format.fileSize!)}',
+                    ),
+                    trailing: const Text('الدقة غير معلنة'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('إغلاق'),
+          ),
+          if (inspection.hasFormats)
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _downloadDirect(row);
+              },
+              icon: const Icon(Icons.download),
+              label: const Text('تنزيل الملف الأصلي'),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> _paste() async {
@@ -457,12 +535,14 @@ class _AppShellState extends State<AppShell> {
         onSelected: (value) async {
           if (value == 'share') await Share.share((row['url'] ?? '').toString());
           if (value == 'copy') { await Clipboard.setData(ClipboardData(text: (row['url'] ?? '').toString())); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ الرابط'))); }
+          if (value == 'inspect') await _inspectSource(row);
           if (value == 'download') await _downloadDirect(row);
           if (value == 'delete') { final id = row['id']; if (id is int) await DownloadDatabase.delete(id); await _refresh(); }
         },
         itemBuilder: (_) => const [
           PopupMenuItem(value: 'share', child: Text('مشاركة الرابط')),
           PopupMenuItem(value: 'copy', child: Text('نسخ الرابط')),
+          PopupMenuItem(value: 'inspect', child: Text('فحص المصدر والصيغ')),
           PopupMenuItem(value: 'download', child: Text('تنزيل ملف مباشر')),
           PopupMenuItem(value: 'delete', child: Text('حذف من السجل')),
         ],
