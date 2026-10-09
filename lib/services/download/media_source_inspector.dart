@@ -109,7 +109,9 @@ class MediaSourceInspector {
       final actualExtension = hasKnownExtension
           ? extension
           : _extensionFor(mimeType);
-      final container = actualExtension.replaceFirst('.', '').toUpperCase();
+      final container = actualExtension == '.bin'
+          ? (mimeType.startsWith('video/') ? 'VIDEO' : 'AUDIO')
+          : actualExtension.replaceFirst('.', '').toUpperCase();
       final size = int.tryParse(response.headers['content-length'] ?? '');
       return MediaSourceInspection(
         sourceName: 'خادم الرابط المباشر',
