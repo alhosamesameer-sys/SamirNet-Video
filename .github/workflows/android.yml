@@ -17,6 +17,34 @@ jobs:
           channel: stable
           cache: true
       - run: flutter create --platforms=android --project-name samirnet_videos .
+      - name: Configure Android network and notification support
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
+          permissions = []
+          if "android.permission.INTERNET" not in text:
+              permissions.append('    <uses-permission android:name="android.permission.INTERNET" />')
+          if "android.permission.POST_NOTIFICATIONS" not in text:
+              permissions.append('    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />')
+          if permissions:
+              text = text.replace("    <application", "\n".join(permissions) + "\n    <application", 1)
+              manifest.write_text(text)
+
+          gradle = Path("android/app/build.gradle.kts")
+          text = gradle.read_text()
+          if "isCoreLibraryDesugaringEnabled" not in text:
+              text = text.replace("compileOptions {", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", 1)
+          if "coreLibraryDesugaring(" not in text:
+              dependency = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+              if "dependencies {" in text:
+                  text = text.replace("dependencies {", "dependencies {\n" + dependency, 1)
+              else:
+                  text += "\ndependencies {\n" + dependency + "\n}\n"
+          gradle.write_text(text)
+          PY
       - run: git checkout -- test/widget_test.dart
       - run: flutter pub get
       - run: flutter analyze
