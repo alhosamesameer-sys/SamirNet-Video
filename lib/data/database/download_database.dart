@@ -9,7 +9,7 @@ class DownloadDatabase {
     final dir = await getApplicationDocumentsDirectory();
     _db = await openDatabase(
       p.join(dir.path, 'samirnet_videos.db'),
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE downloads (
@@ -20,7 +20,8 @@ class DownloadDatabase {
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             file_path TEXT,
-            file_size INTEGER
+            file_size INTEGER,
+            destination_uri TEXT
           )
         ''');
       },
@@ -28,6 +29,9 @@ class DownloadDatabase {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE downloads ADD COLUMN file_path TEXT');
           await db.execute('ALTER TABLE downloads ADD COLUMN file_size INTEGER');
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE downloads ADD COLUMN destination_uri TEXT');
         }
       },
     );
@@ -47,12 +51,14 @@ class DownloadDatabase {
     return db.query('downloads', orderBy: 'id DESC');
   }
 
-  static Future<void> updateDownload(int id, {String? status, String? filePath, int? fileSize}) async {
+  static Future<void> updateDownload(int id, {String? title, String? status, String? filePath, int? fileSize, String? destinationUri}) async {
     final db = await database;
     final values = <String, Object?>{};
+    if (title != null) values['title'] = title;
     if (status != null) values['status'] = status;
     if (filePath != null) values['file_path'] = filePath;
     if (fileSize != null) values['file_size'] = fileSize;
+    if (destinationUri != null) values['destination_uri'] = destinationUri;
     if (values.isNotEmpty) await db.update('downloads', values, where: 'id = ?', whereArgs: [id]);
   }
 
