@@ -721,7 +721,7 @@ class _AppShellState extends State<AppShell> {
           const SizedBox(height: 8),
           FilledButton(
             onPressed: () async {
-              final messenger = ScaffoldMessenger.of(this.context);
+              final messenger = ScaffoldMessenger.of(context);
               await SettingsService.saveYouTubeApiKey(_apiKey);
               if (!mounted || !context.mounted) return;
               Navigator.pop(context);
