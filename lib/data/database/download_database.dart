@@ -51,9 +51,10 @@ class DownloadDatabase {
     return db.query('downloads', orderBy: 'id DESC');
   }
 
-  static Future<void> updateDownload(int id, {String? status, String? filePath, int? fileSize, String? destinationUri}) async {
+  static Future<void> updateDownload(int id, {String? title, String? status, String? filePath, int? fileSize, String? destinationUri}) async {
     final db = await database;
     final values = <String, Object?>{};
+    if (title != null) values['title'] = title;
     if (status != null) values['status'] = status;
     if (filePath != null) values['file_path'] = filePath;
     if (fileSize != null) values['file_size'] = fileSize;
