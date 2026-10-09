@@ -17,6 +17,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter create --platforms=android --project-name samirnet_videos .
+      - run: git checkout -- test/widget_test.dart
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
