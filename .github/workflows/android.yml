@@ -29,6 +29,8 @@ jobs:
               permissions.append('    <uses-permission android:name="android.permission.INTERNET" />')
           if "android.permission.POST_NOTIFICATIONS" not in text:
               permissions.append('    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />')
+          if "android:extractNativeLibs" not in text:
+              text = text.replace("<application", '<application android:extractNativeLibs="true"', 1)
           if permissions:
               text = text.replace("    <application", "\n".join(permissions) + "\n    <application", 1)
               manifest.write_text(text)
@@ -43,6 +45,7 @@ jobs:
                   text = text.replace("dependencies {", "dependencies {\n" + dependency, 1)
               else:
                   text += "\ndependencies {\n" + dependency + "\n}\n"
+          text = text.replace('minSdk = flutter.minSdkVersion', 'minSdk = 24')
           gradle.write_text(text)
           PY
       - run: git checkout -- test/widget_test.dart
