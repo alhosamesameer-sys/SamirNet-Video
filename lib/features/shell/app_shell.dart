@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:docman/docman.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import '../../services/download/yt_dlp_service.dart';
 import '../../services/download/direct_media_downloader.dart';
 import '../../services/download/media_source_inspector.dart';
 import '../../services/download/download_notification_service.dart';
@@ -33,6 +35,7 @@ class _AppShellState extends State<AppShell> {
   String _apiKey = '';
   double? _downloadProgress;
   DirectMediaDownloader? _activeDownloader;
+  String? _activeYtDlpTaskId;
   bool _cancelRequested = false;
   int _downloadReceived = 0;
   int? _downloadTotal;
@@ -222,12 +225,280 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _cancelDownload() {
-    if (!_busy || _activeDownloader == null) return;
+    if (!_busy) return;
     _cancelRequested = true;
-    _activeDownloader!.close();
+    final downloader = _activeDownloader;
+    final taskId = _activeYtDlpTaskId;
+    if (downloader != null) {
+      downloader.close();
+    } else if (taskId != null) {
+      YtDlpService.instance.cancel(taskId);
+    }
     if (mounted) {
       setState(() => _message = 'جارٍ إلغاء التنزيل وتنظيف الملف الجزئي...');
     }
+  }
+
+  Future<void> _downloadWithEngine(
+    Map<String, Object?> row, {
+    required String format,
+  }) async {
+    if (_busy) return;
+    final id = row['id'];
+    if (id is! int) return;
+    final uri = PlatformResolver.parseHttpUrl((row['url'] ?? '').toString());
+    if (uri == null) {
+      setState(() => _message = 'الرابط المحفوظ غير صالح.');
+      return;
+    }
+    final taskId = 'samirnet-${DateTime.now().microsecondsSinceEpoch}';
+    _activeYtDlpTaskId = taskId;
+    _cancelRequested = false;
+    setState(() {
+      _busy = true;
+      _downloadProgress = null;
+      _downloadReceived = 0;
+      _downloadTotal = null;
+      _message = 'جارٍ تهيئة محرك التنزيل وتحليل الصيغة...';
+    });
+    try {
+      await DownloadDatabase.updateDownload(
+        id,
+        status: 'جارٍ التنزيل',
+        filePath: '',
+        fileSize: 0,
+      );
+      await _refresh();
+      final file = await YtDlpService.instance.download(
+        url: uri.toString(),
+        format: format,
+        taskId: taskId,
+        onProgress: (fraction, eta) {
+          if (!mounted || _activeYtDlpTaskId != taskId) return;
+          setState(() {
+            _downloadProgress = fraction;
+            _message = fraction == null
+                ? 'جارٍ التنزيل...'
+                : 'جارٍ التنزيل: ${(fraction * 100).toStringAsFixed(1)}%'
+                    '${eta != null && eta > 0 ? ' • متبقٍ نحو ${eta} ثانية' : ''}';
+          });
+        },
+      );
+      final size = await file.length();
+      String? destinationUri;
+      String? folderCopyError;
+      final selectedFolderUri = _saveFolderUri;
+      if (selectedFolderUri != null && selectedFolderUri.isNotEmpty) {
+        try {
+          final sourceFile = await DocumentFile.fromUri(file.path);
+          final copiedFile = await sourceFile?.copyTo(
+            selectedFolderUri,
+            name: p.basename(file.path),
+          );
+          if (copiedFile == null) {
+            throw Exception('لم يتمكن Android من إنشاء نسخة في المجلد المحدد.');
+          }
+          destinationUri = copiedFile.uri;
+        } catch (error) {
+          folderCopyError = error.toString().replaceFirst('Exception: ', '');
+        }
+      }
+      await DownloadDatabase.updateDownload(
+        id,
+        status: 'اكتمل التنزيل',
+        filePath: file.path,
+        fileSize: size,
+        destinationUri: destinationUri ?? '',
+      );
+      await _refresh();
+      if (_notificationsEnabled) {
+        try {
+          await DownloadNotificationService.show(
+            id: id,
+            title: 'اكتمل التنزيل',
+            body: p.basename(file.path),
+          );
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() {
+          _message = folderCopyError == null
+              ? 'اكتمل تنزيل ${p.basename(file.path)} (${_formatBytes(size)}).'
+              : 'اكتمل التنزيل داخل التطبيق، لكن تعذر النسخ إلى المجلد المحدد: $folderCopyError';
+        });
+      }
+    } catch (error) {
+      final cancelled = _cancelRequested ||
+          error.toString().contains('إلغاء التنزيل') ||
+          error.toString().contains('cancel');
+      try {
+        await DownloadDatabase.updateDownload(
+          id,
+          status: cancelled ? 'أُلغي التنزيل' : 'فشل التنزيل',
+          filePath: '',
+          fileSize: 0,
+        );
+        await _refresh();
+      } catch (_) {}
+      if (_notificationsEnabled && !cancelled) {
+        try {
+          await DownloadNotificationService.show(
+            id: id,
+            title: 'تعذر إكمال التنزيل',
+            body: error.toString().replaceFirst('Exception: ', ''),
+          );
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() => _message = cancelled
+            ? 'تم إلغاء التنزيل.'
+            : error.toString().replaceFirst('Exception: ', ''));
+      }
+    } finally {
+      if (_activeYtDlpTaskId == taskId) _activeYtDlpTaskId = null;
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _downloadProgress = null;
+          _downloadReceived = 0;
+          _downloadTotal = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _showDownloadChoices(Map<String, Object?> row) async {
+    if (_busy) return;
+    final uri = PlatformResolver.parseHttpUrl((row['url'] ?? '').toString());
+    if (uri == null) {
+      setState(() => _message = 'الرابط المحفوظ غير صالح.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _message = 'جارٍ جلب معلومات الفيديو والصيغ المتاحة...';
+    });
+    Map<String, dynamic> info;
+    List<YtDlpFormat> formats;
+    try {
+      info = await YtDlpService.instance.inspect(uri.toString());
+      formats = YtDlpService.instance.videoFormats(info);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _message =
+            'تعذر الوصول إلى الفيديو أو استخراج صِيَغه: ${error.toString().replaceFirst('Exception: ', '')}');
+      }
+      return;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    String type = 'video';
+    String selector = formats.isNotEmpty
+        ? formats.first.selector()
+        : 'bestvideo+bestaudio/best';
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('خيارات التنزيل'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text((info['title'] ?? row['title'] ?? 'فيديو').toString(),
+                      maxLines: 3, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 12),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'video',
+                    groupValue: type,
+                    title: const Text('تنزيل فيديو مع الصوت'),
+                    onChanged: (value) {
+                      if (value != null) setDialogState(() => type = value);
+                    },
+                  ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'audio',
+                    groupValue: type,
+                    title: const Text('تنزيل الصوت فقط'),
+                    onChanged: (value) {
+                      if (value != null) setDialogState(() => type = value);
+                    },
+                  ),
+                  if (type == 'video') ...[
+                    const SizedBox(height: 6),
+                    const Text('الجودة المتاحة من المصدر',
+                        style: TextStyle(fontWeight: FontWeight.w800)),
+                    if (formats.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 10),
+                        child: Text('لم يعرض المصدر قائمة صيغ مفصلة؛ سيُستخدم أفضل تنسيق متاح.'),
+                      )
+                    else
+                      ...formats.map((format) => RadioListTile<String>(
+                            contentPadding: EdgeInsets.zero,
+                            value: format.selector(),
+                            groupValue: selector,
+                            title: Text(format.label),
+                            subtitle: format.fileSize == null
+                                ? null
+                                : Text(_formatBytes(format.fileSize!)),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setDialogState(() => selector = value);
+                              }
+                            },
+                          )),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                type == 'audio' ? 'bestaudio/best' : selector,
+              ),
+              icon: const Icon(Icons.download),
+              label: const Text('بدء التنزيل'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (chosen != null && mounted) {
+      await _downloadWithEngine(row, format: chosen);
+    }
+  }
+
+  Future<void> _saveAndChooseVideo(YouTubeVideo video) async {
+    final id = await DownloadDatabase.add(
+      url: video.watchUrl,
+      platform: 'YouTube',
+      title: video.title,
+      status: 'جاهز لاختيار الجودة',
+    );
+    await _refresh();
+    final row = _downloads.firstWhere(
+      (item) => item['id'] == id,
+      orElse: () => <String, Object?>{
+        'id': id,
+        'url': video.watchUrl,
+        'platform': 'YouTube',
+        'title': video.title,
+      },
+    );
+    if (mounted) await _showDownloadChoices(row);
   }
 
   String? _extractYouTubeId(Uri uri) {
@@ -338,40 +609,64 @@ class _AppShellState extends State<AppShell> {
       setState(() => _message = 'تعذر التعرّف على الرابط. تحقق من العنوان.');
       return;
     }
-    setState(() { _busy = true; _message = ''; });
+    final label = PlatformResolver.label(platform);
+    setState(() { _busy = true; _message = 'جارٍ تحليل الرابط العام...'; });
+    int? rowId;
+    Map<String, dynamic>? info;
     try {
-      final label = PlatformResolver.label(platform);
-      var title = 'رابط من $label';
-      var status = 'جاهز للتحليل';
-      YouTubeVideo? videoDetails;
-      if (platform == MediaPlatform.youtube && _apiKey.isNotEmpty) {
-        final videoId = _extractYouTubeId(uri);
-        if (videoId != null) {
-          try {
-            videoDetails = await YouTubeSearchService().getVideoDetails(videoId: videoId, apiKey: _apiKey);
-            if (videoDetails != null) {
-              title = videoDetails.title;
-              status = 'تم جلب بيانات الفيديو';
-            }
-          } catch (_) {
-            status = 'تم حفظ الرابط - تعذر جلب البيانات';
-          }
-        }
-      }
-      await DownloadDatabase.add(url: uri.toString(), platform: label, title: title, status: status);
+      rowId = await DownloadDatabase.add(
+        url: uri.toString(),
+        platform: label,
+        title: 'جارٍ تحليل رابط $label',
+        status: 'جارٍ تحليل المصدر',
+      );
       await _refresh();
-      if (!mounted) return;
-      setState(() {
-        _message = platform == MediaPlatform.direct
-          ? 'تم حفظ الرابط. سيُتحقق من نوع الملف عند بدء التنزيل.'
-          : platform == MediaPlatform.youtube && videoDetails != null
-            ? 'تم جلب بيانات الفيديو الحقيقية: ${videoDetails.title} • المدة ${_formatDuration(videoDetails.duration).isEmpty ? 'غير متاحة' : _formatDuration(videoDetails.duration)}. بيانات الفيديو لا توفر رابط ملف للتنزيل أو جودات التحميل.'
-            : 'تم التعرف على $label وحفظ الرابط. بيانات الفيديو والتنزيل من صفحة المنصة تعتمد على API/موفّر متوافق؛ لم يبدأ تنزيل وهمي.';
-      });
-    } catch (_) {
-      if (mounted) setState(() => _message = 'تعذر حفظ الرابط محليًا. تحقق من صلاحية قاعدة البيانات.');
+      info = await YtDlpService.instance.inspect(uri.toString());
+      final title = (info['title'] ?? info['fulltitle'] ?? 'فيديو من $label').toString();
+      await DownloadDatabase.updateDownload(
+        rowId,
+        title: title,
+        status: platform == MediaPlatform.youtube
+            ? 'جاهز لاختيار الجودة'
+            : 'جاهز للتنزيل التلقائي',
+      );
+      await _refresh();
+    } catch (error) {
+      if (rowId != null) {
+        try {
+          await DownloadDatabase.updateDownload(
+            rowId,
+            status: 'تعذر الوصول إلى المصدر',
+          );
+          await _refresh();
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() => _message =
+            'تعذر الوصول إلى الفيديو العام أو استخراج معلوماته. قد يكون الرابط خاصًا أو غير مدعوم. التفاصيل: ${error.toString().replaceFirst('Exception: ', '')}');
+      }
+      return;
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted || rowId == null || info == null) return;
+    _url.clear();
+    final row = _downloads.firstWhere(
+      (item) => item['id'] == rowId,
+      orElse: () => <String, Object?>{
+        'id': rowId,
+        'url': uri.toString(),
+        'platform': label,
+        'title': info?['title'] ?? 'فيديو',
+      },
+    );
+    if (platform == MediaPlatform.youtube) {
+      await _showDownloadChoices(row);
+    } else {
+      await _downloadWithEngine(
+        row,
+        format: 'bestvideo+bestaudio/best',
+      );
     }
   }
 
@@ -509,7 +804,23 @@ class _AppShellState extends State<AppShell> {
     FilledButton.icon(onPressed: _searching ? null : _runYouTubeSearch, icon: _searching ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search), label: const Text('بحث حقيقي في YouTube')),
     const SizedBox(height: 14),
     if (_message.isNotEmpty) _MessageCard(message: _message),
-    if (_searchResults.isNotEmpty) ..._searchResults.map((video) => Card(margin: const EdgeInsets.only(bottom: 10), child: ListTile(leading: video.thumbnail.isEmpty ? const Icon(Icons.play_circle_outline) : Image.network(video.thumbnail, width: 84, height: 60, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.play_circle_outline)), title: Text(video.title, maxLines: 2, overflow: TextOverflow.ellipsis), subtitle: Text(video.channel), trailing: IconButton(icon: const Icon(Icons.open_in_new), onPressed: () => Share.share(video.watchUrl)), onTap: () => _showVideoDetails(video)))),
+    if (_searchResults.isNotEmpty) ..._searchResults.map((video) => Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        leading: video.thumbnail.isEmpty
+            ? const Icon(Icons.play_circle_outline)
+            : Image.network(video.thumbnail, width: 84, height: 60, fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const Icon(Icons.play_circle_outline)),
+        title: Text(video.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+        subtitle: Text(video.channel),
+        trailing: IconButton(
+          tooltip: 'تنزيل',
+          icon: const Icon(Icons.download_outlined),
+          onPressed: () => _saveAndChooseVideo(video),
+        ),
+        onTap: () => _showVideoDetails(video),
+      ),
+    )),
     if (_searchResults.isEmpty && _message.isEmpty) const _InfoCard(icon: Icons.public, title: 'البحث المباشر', body: 'يعرض نتائج YouTube الحقيقية باستخدام YouTube Data API بعد إضافة مفتاح API من الإعدادات.'),
   ]);
 
@@ -523,37 +834,129 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> _showVideoDetails(YouTubeVideo video) async {
     YouTubeVideo details = video;
-    try {
-      final fresh = await YouTubeSearchService().getVideoDetails(videoId: video.id, apiKey: _apiKey);
-      if (fresh != null) details = fresh;
-    } catch (e) {
-      if (mounted) setState(() => _message = e.toString().replaceFirst('Exception: ', ''));
+    if (_apiKey.isNotEmpty) {
+      try {
+        final fresh = await YouTubeSearchService().getVideoDetails(
+          videoId: video.id,
+          apiKey: _apiKey,
+        );
+        if (fresh != null) details = fresh;
+      } catch (error) {
+        if (mounted) {
+          setState(() => _message =
+              error.toString().replaceFirst('Exception: ', ''));
+        }
+      }
     }
     if (!mounted) return;
-    await showDialog<void>(context: context, builder: (dialogContext) => AlertDialog(
-      title: Text(details.title, maxLines: 3, overflow: TextOverflow.ellipsis),
-      content: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        Text('القناة: ${details.channel.isEmpty ? 'غير متاح' : details.channel}'),
-        if (details.publishedAt != null) Text('تاريخ النشر: ${details.publishedAt!.toLocal().toString().split(' ').first}'),
-        if (details.duration.isNotEmpty) Text('المدة: ${_formatDuration(details.duration)}'),
-        if (details.definition.isNotEmpty) Text('الدقة الأصلية: ${details.definition.toUpperCase()}'),
-        if (details.viewCount != null) Text('المشاهدات: ${_formatCount(details.viewCount!)}'),
-        if (details.likeCount != null) Text('الإعجابات: ${_formatCount(details.likeCount!)}'),
-        if (details.commentCount != null) Text('التعليقات: ${_formatCount(details.commentCount!)}'),
-        const SizedBox(height: 12),
-        Text(details.description.isEmpty ? 'لا يوجد وصف متاح.' : details.description),
-      ])),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('إغلاق')),
-        TextButton(onPressed: () async {
-          await DownloadDatabase.add(url: details.watchUrl, platform: 'YouTube', title: details.title, status: 'رابط محفوظ - مصدر التنزيل غير متاح');
-          await _refresh();
-          if (dialogContext.mounted) Navigator.pop(dialogContext);
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم حفظ رابط الفيديو في المكتبة')));
-        }, child: const Text('حفظ الرابط')),
-        FilledButton(onPressed: () => Share.share(details.watchUrl), child: const Text('فتح/مشاركة')),
-      ],
-    ));
+    List<YouTubeVideo> related = [];
+    if (_apiKey.isNotEmpty) {
+      try {
+        related = await YouTubeSearchService().search(
+          query: '${details.title} ${details.channel}',
+          apiKey: _apiKey,
+          maxResults: 8,
+        );
+        related = related.where((item) => item.id != details.id).take(5).toList();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    final player = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF000000))
+      ..setNavigationDelegate(NavigationDelegate(
+        onNavigationRequest: (request) => request.url.contains('youtube.com/embed/')
+            || request.url.contains('youtube.com')
+            || request.url.contains('youtube-nocookie.com')
+            || request.url.contains('google.com')
+            ? NavigationDecision.navigate
+            : NavigationDecision.prevent,
+      ))
+      ..loadHtmlString('''
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"></head>
+<body style="margin:0;background:#000"><iframe width="100%" height="100%" src="https://www.youtube.com/embed/${details.id}?autoplay=1&rel=1&playsinline=1" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>
+''');
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        title: Text(details.title, maxLines: 3, overflow: TextOverflow.ellipsis),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * .72,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    height: 210,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: WebViewWidget(controller: player),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('القناة: ${details.channel.isEmpty ? 'غير متاح' : details.channel}'),
+                  if (details.publishedAt != null)
+                    Text('تاريخ النشر: ${details.publishedAt!.toLocal().toString().split(' ').first}'),
+                  if (details.duration.isNotEmpty)
+                    Text('المدة: ${_formatDuration(details.duration)}'),
+                  if (details.definition.isNotEmpty)
+                    Text('الدقة الأصلية: ${details.definition.toUpperCase()}'),
+                  if (details.viewCount != null)
+                    Text('المشاهدات: ${_formatCount(details.viewCount!)}'),
+                  if (details.likeCount != null)
+                    Text('الإعجابات: ${_formatCount(details.likeCount!)}'),
+                  if (details.commentCount != null)
+                    Text('التعليقات: ${_formatCount(details.commentCount!)}'),
+                  const SizedBox(height: 10),
+                  Text(details.description.isEmpty ? 'لا يوجد وصف متاح.' : details.description),
+                  const SizedBox(height: 14),
+                  const Text('فيديوهات مشابهة', style: TextStyle(fontWeight: FontWeight.w800)),
+                  if (related.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('لا تتوفر نتائج مشابهة الآن.'),
+                    ),
+                  ...related.map((item) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: item.thumbnail.isEmpty
+                        ? const Icon(Icons.play_circle_outline)
+                        : Image.network(item.thumbnail, width: 82, height: 56,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const Icon(Icons.play_circle_outline)),
+                    title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(item.channel, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    onTap: () {
+                      Navigator.pop(dialogContext);
+                      _showVideoDetails(item);
+                    },
+                  )),
+                ],
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('إغلاق'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _saveAndChooseVideo(details);
+            },
+            icon: const Icon(Icons.download),
+            label: const Text('تنزيل'),
+          ),
+        ],
+      ),
+    );
   }
 
   String _formatCount(int value) {
@@ -602,14 +1005,14 @@ class _AppShellState extends State<AppShell> {
           if (value == 'share') await Share.share((row['url'] ?? '').toString());
           if (value == 'copy') { await Clipboard.setData(ClipboardData(text: (row['url'] ?? '').toString())); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ الرابط'))); }
           if (value == 'inspect') await _inspectSource(row);
-          if (value == 'download') await _downloadDirect(row);
+          if (value == 'download') await _showDownloadChoices(row);
           if (value == 'delete') { final id = row['id']; if (id is int) await DownloadDatabase.delete(id); await _refresh(); }
         },
         itemBuilder: (_) => const [
           PopupMenuItem(value: 'share', child: Text('مشاركة الرابط')),
           PopupMenuItem(value: 'copy', child: Text('نسخ الرابط')),
           PopupMenuItem(value: 'inspect', child: Text('فحص المصدر والصيغ')),
-          PopupMenuItem(value: 'download', child: Text('تنزيل ملف مباشر')),
+          PopupMenuItem(value: 'download', child: Text('تنزيل صوت أو فيديو')),
           PopupMenuItem(value: 'delete', child: Text('حذف من السجل')),
         ],
       ),
@@ -619,7 +1022,7 @@ class _AppShellState extends State<AppShell> {
   Widget _downloadsPage() => ListView(padding: const EdgeInsets.all(18), children: [
     const Text('التنزيلات', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
     const SizedBox(height: 12),
-    const _InfoCard(icon: Icons.downloading, title: 'إدارة التنزيلات', body: 'يمكن تنزيل الروابط المباشرة لملفات الصوت والفيديو. روابط صفحات YouTube وTikTok وغيرها ليست روابط ملفات مباشرة وتحتاج إلى مصدر رسمي متوافق.'),
+    const _InfoCard(icon: Icons.downloading, title: 'إدارة التنزيلات', body: 'تنزيل الروابط العامة المدعومة عبر محرك yt-dlp، مع اختيار جودة YouTube أو تنزيل الروابط الخارجية تلقائيًا بأفضل صيغة متاحة.'),
     if (_busy) ...[
       LinearProgressIndicator(value: _downloadProgress),
       const SizedBox(height: 6),
