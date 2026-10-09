@@ -130,7 +130,11 @@ class DirectMediaDownloader {
     if (clean.isEmpty) {
       clean = 'media_${DateTime.now().millisecondsSinceEpoch}';
     }
-    if (p.extension(clean).isEmpty) clean = '$clean$extension';
+    final currentExtension = p.extension(clean).toLowerCase();
+    if (currentExtension.isNotEmpty) {
+      clean = p.basenameWithoutExtension(clean);
+    }
+    clean = '$clean$extension';
     return clean;
   }
 
@@ -141,7 +145,7 @@ class DirectMediaDownloader {
     if (type.contains('wav')) return '.wav';
     if (type.contains('quicktime')) return '.mov';
     if (type.contains('mp4')) return '.mp4';
-    return '.mp4';
+    return '.bin';
   }
 
   void close() {
